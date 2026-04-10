@@ -5,6 +5,8 @@ Changes from v3:
   - Fixes the "all centered" visualisation issue
   - Cleaner physically: only the illuminated area has learnable phase
 """
+
+
 import os
 import torch
 import torch.nn as nn
@@ -25,10 +27,10 @@ PIXEL_SIZE   = 0.3e-3
 GRID_SIZE    = 28
 PAD          = 14
 LAYER_DIST   = 0.10
-N_LAYERS     = 10
+N_LAYERS     = 20
 N_CLASSES    = 10
 BATCH_SIZE   = 128
-EPOCHS       = 1 #temporary changes pb better at about 10-20
+EPOCHS       = 5 #temporary changes pb better at about 10-20
 LR           = 2e-3
 NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0] 
 # se renseigner sur les differentes manieres de gerer la config pour
@@ -37,6 +39,17 @@ NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
 #danger d'un determinisme trop important qui permette de faire des gros contrastes de phase  et ainsi d'avoir la precision necessaire avec les 10000 images test;;
 
 PADDED = GRID_SIZE + 2 * PAD   # 56
+print("""░▒▓███████▓▒░░▒▓███████▓▒░░▒▓███████▓▒░░▒▓███████▓▒░  
+░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+░▒▓███████▓▒░░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░""")
+
+
+
+
 
 print(f"Device  : {DEVICE}")
 print(f"λ = {WAVELENGTH*1e9:.0f} nm | pixel = {PIXEL_SIZE*1e3:.1f} mm | "
