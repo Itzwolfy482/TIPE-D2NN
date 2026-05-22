@@ -68,7 +68,7 @@ def make_propagation_kernel(grid_size, wavelength, pixel_size, distance, device)
     H_re  = torch.tensor(np.cos(phase), dtype=torch.float32, device=device).unsqueeze(0)
     H_im  = torch.tensor(np.sin(phase), dtype=torch.float32, device=device).unsqueeze(0)
     return H_re, H_im
-
+# la partie qui cree la source de lumière "parfaite"
 
 def propagate(field_re, field_im, H_re, H_im):
     F      = torch.fft.fft2(torch.complex(field_re, field_im))
@@ -76,6 +76,7 @@ def propagate(field_re, field_im, H_re, H_im):
     out_im = F.real * H_im + F.imag * H_re
     out    = torch.fft.ifft2(torch.complex(out_re, out_im))
     return out.real, out.imag
+# propagation à travers le milieu 
 
 
 # ── Diffractive Layer ──────────────────────────────────────────────────────────
@@ -110,6 +111,7 @@ class DiffractiveLayer(nn.Module):
         out_re = field_re * t_re - field_im * t_im
         out_im = field_re * t_im + field_im * t_re
         return out_re, out_im
+# cree les elements pour pouvoir avoir l'effet diffractif necessaire 
 
 
 # ── Full D2NN ──────────────────────────────────────────────────────────────────
@@ -157,6 +159,8 @@ class D2NN(nn.Module):
         intensity = field_re**2 + field_im**2
         return torch.log_softmax(self.readout(intensity.flatten(1)), dim=1)
 
+# totalite de comment le D2NN fonctionne pour nous 
+
 
 # ── Data ───────────────────────────────────────────────────────────────────────
 def load_mnist(batch_size):
@@ -169,6 +173,7 @@ def load_mnist(batch_size):
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=0)
     test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False, num_workers=0)
     return train_loader, test_loader
+#un peu inutile pour nous pourrais etre mis dans un autre fichier pour eviter de le bloat
 
 
 # ── Train / Eval ───────────────────────────────────────────────────────────────
@@ -191,7 +196,7 @@ def train_epoch(model, loader, optimizer, epoch, total_epochs):
                   f"Loss: {running_loss/(i+1):.3f} | Acc: {100*correct/total:.1f}%", end='\r')
     print()
     return running_loss / len(loader), 100 * correct / total
-
+# partie qui permet l'entrainement du reseau
 
 def evaluate(model, loader):
     model.eval()
@@ -202,6 +207,8 @@ def evaluate(model, loader):
             correct += model(data).argmax(1).eq(target).sum().item()
             total   += len(target)
     return 100 * correct / total
+
+#formule un peu basique pour connaitre a quel point le truc fut terrible par rapport a un autre set de donnees que celui entraine
 
 
 # ── Noise sweep ────────────────────────────────────────────────────────────────
@@ -217,6 +224,8 @@ def noise_sweep(model, loader, levels):
         print(f"  σ = {sigma:.2f} rad │{bar}│ {acc:.1f}%")
     model.noise_std = 0.0
     return results
+
+#create de bruit pour les differents masques (mouhahah tres mechant)
 
 
 # ── Plot ───────────────────────────────────────────────────────────────────────
@@ -302,6 +311,8 @@ def plot(train_accs, test_accs, noise_levels, noise_accs, model):
     print("Plot saved → d2nn_results.png")
     plt.close()
 
+#partie pour le graphe, pas tres interessante d'un point de vue technique 
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
@@ -321,7 +332,7 @@ def main():
 
     n_optical    = sum(p.numel() for p in model.layers.parameters())
     n_electronic = sum(p.numel() for p in model.readout.parameters())
-    print(f"  Optical parameters    (phase masks) : {n_optical:,}")
+    print(f"  Optical parameet un chasseur de primes dans la ville de Coruscant. À un moment, les pilotes effectuentters    (phase masks) : {n_optical:,}")
     print(f"  Electronic parameters (readout)     : {n_electronic:,}")
     print(f"  Total                               : {n_optical + n_electronic:,}\n")
 
@@ -330,13 +341,18 @@ def main():
 
     train_accs, test_accs = [], []
     print("── Training ─────────────────────────────────────────────────")
+    # voila comment fonctionne le truc (les étapes parcourues)
+
+
     for epoch in range(1, EPOCHS + 1):
-        _, tr = train_epoch(model, train_loader, optimizer, epoch, EPOCHS)
-        te    = evaluate(model, test_loader)
+        _, tr = train_epoch(model, train_loader, optimizer, epoch, EPOCHS) #on entraine
+        te    = evaluate(model, test_loader) #puis on teste sur un certains nombre d'autres images
         train_accs.append(tr)
         test_accs.append(te)
         scheduler.step()
         print(f"  ✓ Epoch {epoch:2d}/{EPOCHS}  train {tr:.1f}%  test {te:.1f}%")
+
+    #du blabla pour la recherche scientifique
 
     noise_accs = noise_sweep(model, test_loader, NOISE_LEVELS)
     plot(train_accs, test_accs, NOISE_LEVELS, noise_accs, model)
