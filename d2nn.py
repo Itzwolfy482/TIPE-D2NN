@@ -30,7 +30,7 @@ LAYER_DIST   = 0.10
 N_LAYERS     = 20
 N_CLASSES    = 10
 BATCH_SIZE   = 128
-EPOCHS       = 5 #temporary changes pb better at about 10-20
+EPOCHS       = 5    #temporary changes pb better at about 10-20
 LR           = 2e-3
 NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0] 
 # se renseigner sur les differentes manieres de gerer la config pour
