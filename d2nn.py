@@ -14,6 +14,8 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from torch.utils.data import DataLoader
@@ -22,15 +24,15 @@ warnings.filterwarnings('ignore')
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-WAVELENGTH   = 532e-9
-PIXEL_SIZE   = 0.3e-3
+WAVELENGTH   = 2.5e-3
+PIXEL_SIZE   = 5e-3
 GRID_SIZE    = 28
 PAD          = 14
-LAYER_DIST   = 0.10
+LAYER_DIST   = 0.30
 N_LAYERS     = 20
 N_CLASSES    = 10
 BATCH_SIZE   = 128
-EPOCHS       = 5    #temporary changes pb better at about 10-20
+EPOCHS       = 1    #temporary changes pb better at about 10-20
 LR           = 2e-3
 NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0] 
 # se renseigner sur les differentes manieres de gerer la config pour
@@ -311,8 +313,52 @@ def plot(train_accs, test_accs, noise_levels, noise_accs, model):
     print("Plot saved → d2nn_results.png")
     plt.close()
 
-#partie pour le graphe, pas tres interessante d'un point de vue technique 
-
+#partie pour le graphe, pas tres interessante d'un point de vue technique ensuite un truc pour exporter les masques
+def export_masks(model, wavelength, n_material=1.5, output_dir='.'):
+    """
+    Export trained phase masks as:
+    - .npy files (raw phase values in radians)
+    - .csv files (physical heights in mm, scaled for printing)
+    - .png images (visualisation)
+    """
+    import os
+    import csv
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Max height for one full 2pi phase shift
+    h_max_m = wavelength / (n_material - 1)
+    
+    for i, layer in enumerate(model.layers):
+        phase = layer.phase.detach().cpu().numpy()  # [28, 28], range [-pi, pi]
+        
+        # Shift to [0, 2pi] — all heights positive
+        phase_positive = phase + np.pi              # [0, 2pi]
+        
+        # Convert to physical height in mm
+        heights_mm = (phase_positive / (2 * np.pi)) * h_max_m * 1e3
+        
+        # Save raw phase
+        np.save(f'{output_dir}/mask_{i+1}_phase.npy', phase)
+        
+        # Save heights as CSV
+        with open(f'{output_dir}/mask_{i+1}_heights.csv', 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(np.round(heights_mm, 6))
+        
+        # Save visualisation
+        plt.figure(figsize=(6, 6))
+        plt.imshow(heights_mm, cmap='viridis')
+        plt.colorbar(label='Height (mm)')
+        plt.title(f'Phase Mask Layer {i+1} — Print Heights (mm)')
+        plt.axis('off')
+        plt.savefig(f'{output_dir}/mask_{i+1}_heights.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Layer {i+1}: height range {heights_mm.min():.4f} – {heights_mm.max():.4f} mm")
+    
+    print(f"\nAll masks exported to '{output_dir}/'")
+    print(f"Max height per 2π at λ={wavelength*1e9:.0f}nm: {h_max_m*1e9:.1f} nm")
+    print(f"(At optical wavelengths this is sub-micron — not directly printable)")
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
@@ -332,7 +378,7 @@ def main():
 
     n_optical    = sum(p.numel() for p in model.layers.parameters())
     n_electronic = sum(p.numel() for p in model.readout.parameters())
-    print(f"  Optical parameet un chasseur de primes dans la ville de Coruscant. À un moment, les pilotes effectuentters    (phase masks) : {n_optical:,}")
+    print(f"  Optical parameters    (phase masks) : {n_optical:,}")
     print(f"  Electronic parameters (readout)     : {n_electronic:,}")
     print(f"  Total                               : {n_optical + n_electronic:,}\n")
 
@@ -370,6 +416,7 @@ def main():
     print(f"  FDM printer roughness  ~50,000 nm  →  far outside tolerance")
     print(f"  SLA resin roughness    ~1,000  nm  →  borderline")
     print(f"  Optical polishing      ~10     nm  →  within tolerance")
+    export_masks(model, WAVELENGTH, output_dir='masks')
 
 
 if __name__ == "__main__":
