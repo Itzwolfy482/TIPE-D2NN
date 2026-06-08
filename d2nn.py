@@ -29,10 +29,10 @@ PIXEL_SIZE   = 5e-3
 GRID_SIZE    = 28
 PAD          = 14
 LAYER_DIST   = 0.30
-N_LAYERS     = 20
+N_LAYERS     = 5
 N_CLASSES    = 10
 BATCH_SIZE   = 128
-EPOCHS       = 1    #temporary changes pb better at about 10-20
+EPOCHS       = 6   #temporary changes pb better at about 10-20
 LR           = 2e-3
 NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0] 
 # se renseigner sur les differentes manieres de gerer la config pour
