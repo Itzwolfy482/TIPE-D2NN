@@ -25,14 +25,15 @@ warnings.filterwarnings('ignore')
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WAVELENGTH   = 2.5e-3
-PIXEL_SIZE   = 5e-3
-GRID_SIZE    = 28
-PAD          = 14
+GRID_SIZE    = 28                       # pixels across the active region (matches MNIST natively)
+MASK_WIDTH   = 0.15                     # physical mask width/height in metres (20 cm × 20 cm)
+PIXEL_SIZE   = MASK_WIDTH / GRID_SIZE   # ≈ 7.14 mm pixel pitch
+PAD          = GRID_SIZE // 2
 LAYER_DIST   = 0.30
 N_LAYERS     = 5
 N_CLASSES    = 10
 BATCH_SIZE   = 128
-EPOCHS       = 6   #temporary changes pb better at about 10-20
+EPOCHS       = 5  #temporary changes pb better at about 10-20
 LR           = 2e-3
 NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0] 
 # se renseigner sur les differentes manieres de gerer la config pour
@@ -41,6 +42,7 @@ NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
 #danger d'un determinisme trop important qui permette de faire des gros contrastes de phase  et ainsi d'avoir la precision necessaire avec les 10000 images test;;
 
 PADDED = GRID_SIZE + 2 * PAD   # 56
+
 print("""░▒▓███████▓▒░░▒▓███████▓▒░░▒▓███████▓▒░░▒▓███████▓▒░  
 ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
 ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
@@ -54,8 +56,9 @@ print("""░▒▓███████▓▒░░▒▓███████�
 
 
 print(f"Device  : {DEVICE}")
-print(f"λ = {WAVELENGTH*1e9:.0f} nm | pixel = {PIXEL_SIZE*1e3:.1f} mm | "
-      f"active = {GRID_SIZE}² | propagation grid = {PADDED}²")
+print(f"λ = {WAVELENGTH*1e3:.1f} mm | pixel = {PIXEL_SIZE*1e3:.2f} mm | "
+      f"active = {GRID_SIZE}² | mask = {GRID_SIZE*PIXEL_SIZE*100:.0f}×{GRID_SIZE*PIXEL_SIZE*100:.0f} cm | "
+      f"propagation grid = {PADDED}²")
 
 
 # ── Propagation kernel ─────────────────────────────────────────────────────────
@@ -167,6 +170,7 @@ class D2NN(nn.Module):
 # ── Data ───────────────────────────────────────────────────────────────────────
 def load_mnist(batch_size):
     transform = transforms.Compose([
+        transforms.Resize((GRID_SIZE, GRID_SIZE)),
         transforms.ToTensor(),
         transforms.Lambda(lambda x: torch.clamp(x, 0, 1))
     ])
@@ -329,13 +333,15 @@ def export_masks(model, wavelength, n_material=1.5, output_dir='.'):
     h_max_m = wavelength / (n_material - 1)
     
     for i, layer in enumerate(model.layers):
-        phase = layer.phase.detach().cpu().numpy()  # [28, 28], range [-pi, pi]
-        
-        # Shift to [0, 2pi] — all heights positive
-        phase_positive = phase + np.pi              # [0, 2pi]
-        
+        phase = layer.phase.detach().cpu().numpy()  # raw trained phase (can exceed [-pi, pi])
+
+        # Phase is only meaningful modulo 2pi (matches exp(i*phase) in the sim),
+        # so wrap into [0, 2pi) rather than shifting — out-of-range pixels would
+        # otherwise saturate and misrepresent the optical function.
+        phase_wrapped = np.mod(phase, 2 * np.pi)    # [0, 2pi)
+
         # Convert to physical height in mm
-        heights_mm = (phase_positive / (2 * np.pi)) * h_max_m * 1e3
+        heights_mm = (phase_wrapped / (2 * np.pi)) * h_max_m * 1e3
         
         # Save raw phase
         np.save(f'{output_dir}/mask_{i+1}_phase.npy', phase)
@@ -357,8 +363,8 @@ def export_masks(model, wavelength, n_material=1.5, output_dir='.'):
         print(f"Layer {i+1}: height range {heights_mm.min():.4f} – {heights_mm.max():.4f} mm")
     
     print(f"\nAll masks exported to '{output_dir}/'")
-    print(f"Max height per 2π at λ={wavelength*1e9:.0f}nm: {h_max_m*1e9:.1f} nm")
-    print(f"(At optical wavelengths this is sub-micron — not directly printable)")
+    print(f"Max height per 2π at λ={wavelength*1e3:.1f} mm: {h_max_m*1e3:.2f} mm")
+    print(f"(At this mm-wave wavelength the relief is millimetre-scale — directly FDM-printable)")
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
