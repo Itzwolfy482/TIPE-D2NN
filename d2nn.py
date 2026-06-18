@@ -25,8 +25,9 @@ warnings.filterwarnings('ignore')
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WAVELENGTH   = 2.5e-3
-PIXEL_SIZE   = 5e-3
-GRID_SIZE    = 20
+GRID_SIZE    = 28                       # pixels across the active region (matches MNIST natively)
+MASK_WIDTH   = 0.20                     # physical mask width/height in metres (20 cm × 20 cm)
+PIXEL_SIZE   = MASK_WIDTH / GRID_SIZE   # ≈ 7.14 mm pixel pitch
 PAD          = GRID_SIZE // 2
 LAYER_DIST   = 0.30
 N_LAYERS     = 5
@@ -55,8 +56,9 @@ print("""░▒▓███████▓▒░░▒▓███████�
 
 
 print(f"Device  : {DEVICE}")
-print(f"λ = {WAVELENGTH*1e9:.0f} nm | pixel = {PIXEL_SIZE*1e3:.1f} mm | "
-      f"active = {GRID_SIZE}² | propagation grid = {PADDED}²")
+print(f"λ = {WAVELENGTH*1e3:.1f} mm | pixel = {PIXEL_SIZE*1e3:.2f} mm | "
+      f"active = {GRID_SIZE}² | mask = {GRID_SIZE*PIXEL_SIZE*100:.0f}×{GRID_SIZE*PIXEL_SIZE*100:.0f} cm | "
+      f"propagation grid = {PADDED}²")
 
 
 # ── Propagation kernel ─────────────────────────────────────────────────────────
