@@ -27,7 +27,9 @@ MASKS_DIR    = './masks'          # folder containing mask_N_phase.npy files
 OUTPUT_DIR   = './masks_3d'      # where STL files and previews go
 WAVELENGTH   = 2.5e-3            # metres — must match simulation WAVELENGTH
 N_MATERIAL   = 1.5               # refractive index of PLA
-PIXEL_SIZE   = 5e-3              # metres — physical size of each mask pixel (5mm)
+GRID_SIZE    = 28               # pixels per side — must match simulation GRID_SIZE
+MASK_WIDTH   = 0.15             # metres — physical mask width — must match simulation MASK_WIDTH
+PIXEL_SIZE   = MASK_WIDTH / GRID_SIZE   # metres — physical size of each mask pixel
 BASE_HEIGHT  = 2.0               # mm — flat base below the phase relief
 ARROW_HEIGHT = 0.6               # mm — height of orientation features above base
 MIN_FEATURE  = 0.15              # mm — minimum printable feature (FDM limit)
@@ -67,103 +69,84 @@ def write_stl(filename, triangles):
             f.write(struct.pack('<H', 0))               # attribute
 
 
-def quad(x0, y0, x1, y1, z_bot, z_top):
-    """Return 2 triangles forming a vertical quad (wall)."""
+# ── Heightmap → STL ───────────────────────────────────────────────────────────
+def corner_marker(pixel_mm, base_h, h_max):
+    """
+    A tall triangular-prism spike at the (0,0) corner that always rises ABOVE the
+    relief, so the (0,0) pixel is unmistakable in any viewer and after printing.
+    Returned as a closed (watertight) solid; the slicer unions it with the slab.
+    """
+    M  = pixel_mm * 2.0                 # footprint size (2 pixels)
+    z0 = 0.0
+    z1 = base_h + h_max + 1.0           # 1 mm above the tallest possible relief
+    P0, P1, P2 = (0.0, 0.0), (M, 0.0), (0.0, M)   # right angle at the (0,0) corner
+    tris = []
+    # Bottom and top triangular caps
+    tris += [((P0[0],P0[1],z0),(P2[0],P2[1],z0),(P1[0],P1[1],z0))]
+    tris += [((P0[0],P0[1],z1),(P1[0],P1[1],z1),(P2[0],P2[1],z1))]
+    # Three vertical side walls
+    for (ax,ay),(bx,by) in [(P0,P1),(P1,P2),(P2,P0)]:
+        tris += [
+            ((ax,ay,z0),(bx,by,z0),(bx,by,z1)),
+            ((ax,ay,z0),(bx,by,z1),(ax,ay,z1)),
+        ]
+    return tris
+
+
+def pixel_box(x0, y0, x1, y1, zt):
+    """
+    A closed axis-aligned box from z=0 to z=zt with a perfectly flat top.
+    Each pixel is one box, so the union is guaranteed watertight (no holes)
+    regardless of how its neighbours step up or down.
+    """
     return [
-        ((x0,y0,z_bot),(x1,y1,z_bot),(x1,y1,z_top)),
-        ((x0,y0,z_bot),(x1,y1,z_top),(x0,y0,z_top)),
+        # bottom (z=0)
+        ((x0,y0,0),(x0,y1,0),(x1,y1,0)),  ((x0,y0,0),(x1,y1,0),(x1,y0,0)),
+        # flat top (z=zt)
+        ((x0,y0,zt),(x1,y0,zt),(x1,y1,zt)),  ((x0,y0,zt),(x1,y1,zt),(x0,y1,zt)),
+        # front (y=y0)
+        ((x0,y0,0),(x1,y0,0),(x1,y0,zt)),  ((x0,y0,0),(x1,y0,zt),(x0,y0,zt)),
+        # back (y=y1)
+        ((x1,y1,0),(x0,y1,0),(x0,y1,zt)),  ((x1,y1,0),(x0,y1,zt),(x1,y1,zt)),
+        # left (x=x0)
+        ((x0,y1,0),(x0,y0,0),(x0,y0,zt)),  ((x0,y1,0),(x0,y0,zt),(x0,y1,zt)),
+        # right (x=x1)
+        ((x1,y0,0),(x1,y1,0),(x1,y1,zt)),  ((x1,y0,0),(x1,y1,zt),(x1,y0,zt)),
     ]
 
 
-# ── Heightmap → STL ───────────────────────────────────────────────────────────
 def heightmap_to_stl(heights_mm, base_h, pixel_mm, layer_idx):
     """
-    Convert a 2D height map to a solid STL mesh.
+    Convert a 2D height map to a solid, watertight STL mesh.
+
+    Each pixel is a FLAT-TOPPED closed box at a single height (one phase
+    value = one height). Emitting a full box per pixel guarantees the union
+    is watertight (no holes) no matter how neighbours step up or down — the
+    physically correct, fabrication-ready representation, not a smoothed
+    surface. Adjacent boxes share coincident interior faces, which the slicer
+    unions cleanly.
 
     Structure:
-      - Flat bottom face at z=0
-      - Vertical walls on 4 sides
-      - Top surface following the heightmap
-      - Orientation marker: a notched corner (top-left) so you know which way is up
-      - Layer number ridge on the front edge
+      - One closed box per pixel (flat top at the pixel's height)
+      - Tall corner spike at (0,0) for orientation
+      - Layer-number ridges on the front edge
     """
     rows, cols = heights_mm.shape
     tris = []
-    top = heights_mm + base_h           # absolute z of top surface
+    top = heights_mm + base_h           # absolute z of each pixel's flat top
 
     W = cols * pixel_mm                 # total width  (x)
     D = rows * pixel_mm                 # total depth  (y)
-    total_h = base_h + heights_mm.max()
 
-    # ── Bottom face (z=0) ────────────────────────────────────────
-    tris += [
-        ((0,0,0),(W,0,0),(W,D,0)),
-        ((0,0,0),(W,D,0),(0,D,0)),
-    ]
-
-    # ── Top surface — one quad per pixel ─────────────────────────
+    # ── One flat-topped box per pixel ────────────────────────────
     for r in range(rows):
         for c in range(cols):
-            x0, x1 = c * pixel_mm, (c+1) * pixel_mm
-            y0, y1 = r * pixel_mm, (r+1) * pixel_mm
-            z00 = top[r,   c  ]
-            z10 = top[r,   c+1] if c+1 < cols else top[r, c]
-            z01 = top[r+1, c  ] if r+1 < rows else top[r, c]
-            z11 = top[r+1, c+1] if (r+1<rows and c+1<cols) else top[r,c]
-            tris += [
-                ((x0,y0,z00),(x1,y0,z10),(x1,y1,z11)),
-                ((x0,y0,z00),(x1,y1,z11),(x0,y1,z01)),
-            ]
+            x0, x1 = c*pixel_mm, (c+1)*pixel_mm
+            y0, y1 = r*pixel_mm, (r+1)*pixel_mm
+            tris += pixel_box(x0, y0, x1, y1, top[r, c])
 
-    # ── Side walls ───────────────────────────────────────────────
-    # Front (y=0)
-    for c in range(cols):
-        x0, x1 = c*pixel_mm, (c+1)*pixel_mm
-        z_top_l, z_top_r = top[0,c], top[0, min(c+1,cols-1)]
-        tris += [
-            ((x0,0,0),(x1,0,0),(x1,0,z_top_r)),
-            ((x0,0,0),(x1,0,z_top_r),(x0,0,z_top_l)),
-        ]
-    # Back (y=D)
-    for c in range(cols):
-        x0, x1 = c*pixel_mm, (c+1)*pixel_mm
-        z_top_l = top[rows-1, c]
-        z_top_r = top[rows-1, min(c+1,cols-1)]
-        tris += [
-            ((x1,D,0),(x0,D,0),(x0,D,z_top_l)),
-            ((x1,D,0),(x0,D,z_top_l),(x1,D,z_top_r)),
-        ]
-    # Left (x=0)
-    for r in range(rows):
-        y0, y1 = r*pixel_mm, (r+1)*pixel_mm
-        z_top_b = top[r,   0]
-        z_top_t = top[min(r+1,rows-1), 0]
-        tris += [
-            ((0,y1,0),(0,y0,0),(0,y0,z_top_b)),
-            ((0,y1,0),(0,y0,z_top_b),(0,y1,z_top_t)),
-        ]
-    # Right (x=W)
-    for r in range(rows):
-        y0, y1 = r*pixel_mm, (r+1)*pixel_mm
-        z_top_b = top[r,   cols-1]
-        z_top_t = top[min(r+1,rows-1), cols-1]
-        tris += [
-            ((W,y0,0),(W,y1,0),(W,y1,z_top_t)),
-            ((W,y0,0),(W,y1,z_top_t),(W,y0,z_top_b)),
-        ]
-
-    # ── Orientation marker ───────────────────────────────────────
-    # A triangular notch cut into the top-left corner of the BASE
-    # so after printing you always know which corner is (0,0)
-    notch = pixel_mm * 1.5
-    z_notch = base_h + ARROW_HEIGHT
-    tris += [
-        ((0,0,base_h),(notch,0,base_h),(0,notch,base_h)),          # notch top face
-        ((0,0,base_h),(0,notch,base_h),(0,0,z_notch)),             # notch wall
-        ((0,0,z_notch),(0,notch,base_h),(0,notch,z_notch)),
-        ((notch,0,base_h),(0,0,z_notch),(notch,0,z_notch)),
-        ((0,0,z_notch),(notch,0,z_notch),(0,notch,z_notch)),       # tip
-    ]
+    # ── Orientation marker: tall corner spike at (0,0) ───────────
+    tris += corner_marker(pixel_mm, base_h, H_MAX)
 
     # ── Layer number ridge on front edge ─────────────────────────
     # Small rectangular ridges encoding the layer number (1 ridge = layer 1, etc.)
@@ -225,7 +208,7 @@ def plot_preview(mask_data, output_dir):
         ax.set_title(f'Layer {idx}  [{heights.min():.2f}–{heights.max():.2f} mm]',
                      color='#d0d0e8', fontsize=9)
         # Mark orientation corner
-        ax.plot(0, 0, 'r^', ms=10, label='Corner (0,0)\nnotch marker')
+        ax.plot(0, 0, 'r^', ms=10, label='Corner (0,0)\nspike marker')
         ax.legend(fontsize=6, loc='upper left',
                   facecolor='#14142a', labelcolor='#d0d0e8',
                   edgecolor='#1e1e32')
@@ -267,17 +250,17 @@ def main():
         fname = os.path.basename(fpath)
         idx   = int(fname.split('_')[1])
 
-        # Load phase values [-π, π]
+        # Load raw trained phase (may run outside [-π, π])
         phase = np.load(fpath)
 
-        # Shift to [0, 2π] so all heights are positive
-        phase_pos = phase + np.pi                          # [0, 2π]
+        # A phase mask only controls phase MODULO 2π (a 2π shift ≡ no shift),
+        # exactly as the simulation uses exp(i·phase). So WRAP into [0, 2π)
+        # instead of shifting-and-clipping, which would saturate out-of-range
+        # pixels and distort the optical function.
+        phase_wrapped = np.mod(phase, 2 * np.pi)           # [0, 2π)
 
-        # Convert to physical height in mm
-        heights = (phase_pos / (2 * np.pi)) * H_MAX       # [0, H_MAX] mm
-
-        # Clamp to printable range
-        heights = np.clip(heights, MIN_FEATURE, H_MAX)
+        # Convert to physical relief height in mm (0 → flat with base, 2π → H_MAX)
+        heights = (phase_wrapped / (2 * np.pi)) * H_MAX    # [0, H_MAX) mm
 
         rows, cols = heights.shape
         mask_mm    = cols * PIXEL_SIZE * 1e3
@@ -316,18 +299,18 @@ def main():
    Infill        : 100%  (solid — phase accuracy requires no voids)
    Perimeters    : 3+
    Orientation   : flat on bed, relief facing UP
-   Notch marker  : top-left corner when relief faces you = pixel (0,0)
+   Spike marker  : tall corner spike (rises above relief) = pixel (0,0)
    Ridge markers : small bumps on front edge = layer number
 
 ── Orientation guide ─────────────────────────────────────────
    When assembling the stack:
    1. Hold mask with relief surface facing the NEXT layer
-   2. Triangular notch goes to TOP-LEFT
+   2. Tall corner spike goes to TOP-LEFT
    3. Ridge count on front edge tells you the layer number
    4. Stack order: laser → mask 1 → [30cm gap] → mask 2 → ... → detector
 
 ── Physical stack dimensions ─────────────────────────────────
-   Mask size     : {28 * PIXEL_SIZE * 1e3:.0f} × {28 * PIXEL_SIZE * 1e3:.0f} mm
+   Mask size     : {GRID_SIZE * PIXEL_SIZE * 1e3:.0f} × {GRID_SIZE * PIXEL_SIZE * 1e3:.0f} mm
    Layer spacing : 300 mm
    Total length  : {len(files) * 300:.0f} mm  ({len(files)} layers)
 """)

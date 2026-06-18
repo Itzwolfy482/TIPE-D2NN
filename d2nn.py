@@ -26,7 +26,7 @@ warnings.filterwarnings('ignore')
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WAVELENGTH   = 2.5e-3
 GRID_SIZE    = 28                       # pixels across the active region (matches MNIST natively)
-MASK_WIDTH   = 0.20                     # physical mask width/height in metres (20 cm × 20 cm)
+MASK_WIDTH   = 0.15                     # physical mask width/height in metres (20 cm × 20 cm)
 PIXEL_SIZE   = MASK_WIDTH / GRID_SIZE   # ≈ 7.14 mm pixel pitch
 PAD          = GRID_SIZE // 2
 LAYER_DIST   = 0.30
@@ -333,13 +333,15 @@ def export_masks(model, wavelength, n_material=1.5, output_dir='.'):
     h_max_m = wavelength / (n_material - 1)
     
     for i, layer in enumerate(model.layers):
-        phase = layer.phase.detach().cpu().numpy()  # [28, 28], range [-pi, pi]
-        
-        # Shift to [0, 2pi] — all heights positive
-        phase_positive = phase + np.pi              # [0, 2pi]
-        
+        phase = layer.phase.detach().cpu().numpy()  # raw trained phase (can exceed [-pi, pi])
+
+        # Phase is only meaningful modulo 2pi (matches exp(i*phase) in the sim),
+        # so wrap into [0, 2pi) rather than shifting — out-of-range pixels would
+        # otherwise saturate and misrepresent the optical function.
+        phase_wrapped = np.mod(phase, 2 * np.pi)    # [0, 2pi)
+
         # Convert to physical height in mm
-        heights_mm = (phase_positive / (2 * np.pi)) * h_max_m * 1e3
+        heights_mm = (phase_wrapped / (2 * np.pi)) * h_max_m * 1e3
         
         # Save raw phase
         np.save(f'{output_dir}/mask_{i+1}_phase.npy', phase)
@@ -361,8 +363,8 @@ def export_masks(model, wavelength, n_material=1.5, output_dir='.'):
         print(f"Layer {i+1}: height range {heights_mm.min():.4f} – {heights_mm.max():.4f} mm")
     
     print(f"\nAll masks exported to '{output_dir}/'")
-    print(f"Max height per 2π at λ={wavelength*1e9:.0f}nm: {h_max_m*1e9:.1f} nm")
-    print(f"(At optical wavelengths this is sub-micron — not directly printable)")
+    print(f"Max height per 2π at λ={wavelength*1e3:.1f} mm: {h_max_m*1e3:.2f} mm")
+    print(f"(At this mm-wave wavelength the relief is millimetre-scale — directly FDM-printable)")
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
