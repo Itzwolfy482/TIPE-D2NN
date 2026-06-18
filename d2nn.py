@@ -26,13 +26,13 @@ warnings.filterwarnings('ignore')
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WAVELENGTH   = 2.5e-3
 PIXEL_SIZE   = 5e-3
-GRID_SIZE    = 28
-PAD          = 14
+GRID_SIZE    = 20
+PAD          = GRID_SIZE // 2
 LAYER_DIST   = 0.30
 N_LAYERS     = 5
 N_CLASSES    = 10
 BATCH_SIZE   = 128
-EPOCHS       = 6   #temporary changes pb better at about 10-20
+EPOCHS       = 5  #temporary changes pb better at about 10-20
 LR           = 2e-3
 NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0] 
 # se renseigner sur les differentes manieres de gerer la config pour
@@ -41,6 +41,7 @@ NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
 #danger d'un determinisme trop important qui permette de faire des gros contrastes de phase  et ainsi d'avoir la precision necessaire avec les 10000 images test;;
 
 PADDED = GRID_SIZE + 2 * PAD   # 56
+
 print("""░▒▓███████▓▒░░▒▓███████▓▒░░▒▓███████▓▒░░▒▓███████▓▒░  
 ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
 ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
@@ -167,6 +168,7 @@ class D2NN(nn.Module):
 # ── Data ───────────────────────────────────────────────────────────────────────
 def load_mnist(batch_size):
     transform = transforms.Compose([
+        transforms.Resize((GRID_SIZE, GRID_SIZE)),
         transforms.ToTensor(),
         transforms.Lambda(lambda x: torch.clamp(x, 0, 1))
     ])
