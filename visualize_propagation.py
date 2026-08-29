@@ -31,6 +31,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.colors import PowerNorm, TwoSlopeNorm
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -164,30 +165,58 @@ def trace_forward(model, x, steps_per_hop=12):
     probs = torch.softmax(model.readout(intensity.flatten(1)), dim=1).squeeze(0).cpu().numpy()
 
     trajectory = np.stack(profile_rows, axis=0)  # (n_z_steps, padded_width)
-    return plane_snapshots, trajectory, np.array(z_positions), probs
+    detector_crop = intensity.squeeze(0).cpu().numpy()  # (grid_size, grid_size), same region the readout sees
+    readout_weights = model.readout.weight.detach().cpu().numpy().reshape(-1, model.grid_size, model.grid_size)
+    return plane_snapshots, trajectory, np.array(z_positions), probs, detector_crop, readout_weights
 
 
 # ── Plots ────────────────────────────────────────────────────────────────────────
-def plot_snapshots(plane_snapshots, probs, true_label, out_path):
-    n = len(plane_snapshots)
-    cols = min(n, 4)
-    rows = int(np.ceil(n / cols)) + 1  # extra row for the classification bar chart
-    fig = plt.figure(figsize=(4 * cols, 4 * rows), facecolor='#080810')
-    gs = gridspec.GridSpec(rows, cols, hspace=0.55, wspace=0.3)
+def plot_snapshots(plane_snapshots, probs, true_label, detector_crop, readout_weights, out_path):
+    pred = int(np.argmax(probs))
+    # Evidence map: how much each detector pixel actually contributed to the
+    # winning class score (readout weight for that class times the light
+    # intensity landing on that pixel) -- this is *how* the digit is read
+    # off the last grid, since the readout is a learned linear combination
+    # of pixels rather than 10 fixed non-overlapping zones.
+    evidence = readout_weights[pred] * detector_crop
+    top_pixel = np.unravel_index(np.argmax(evidence), evidence.shape)
 
-    vmax = max(img.max() for _, _, img in plane_snapshots)
+    n_intensity_panels = len(plane_snapshots)
+    total_panels = n_intensity_panels + 1  # + evidence map
+    cols = min(total_panels, 4)
+    rows = int(np.ceil(total_panels / cols)) + 1  # extra row for the classification bar chart
+    fig = plt.figure(figsize=(4 * cols, 4 * rows), facecolor='#080810')
+    gs = gridspec.GridSpec(rows, cols, hspace=0.55, wspace=0.35)
+
+    # Each physical intensity panel is contrast-stretched against its own
+    # peak (gamma < 1 lifts faint diffracted light out of the near-black
+    # floor) instead of one shared linear scale, which otherwise crushes
+    # every panel past the first mask into dark purple/black.
     for i, (label, z, img) in enumerate(plane_snapshots):
         r, c = divmod(i, cols)
         ax = fig.add_subplot(gs[r, c])
-        im = ax.imshow(img, cmap='inferno', vmin=0, vmax=vmax)
+        norm = PowerNorm(gamma=0.4, vmin=0, vmax=max(img.max(), 1e-12))
+        im = ax.imshow(img, cmap='inferno', norm=norm)
         ax.set_title(f'{label}\n(z = {z*100:.0f} cm)', color=TXT, fontsize=9)
         ax.axis('off')
         cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cb.ax.tick_params(labelsize=6, colors=TXT)
 
+    # Evidence map panel -- diverging colormap since weights can be negative
+    r, c = divmod(n_intensity_panels, cols)
+    ax_ev = fig.add_subplot(gs[r, c])
+    vmax_ev = max(abs(evidence.min()), abs(evidence.max()), 1e-12)
+    im_ev = ax_ev.imshow(evidence, cmap='RdBu_r', norm=TwoSlopeNorm(vcenter=0, vmin=-vmax_ev, vmax=vmax_ev))
+    ax_ev.plot(top_pixel[1], top_pixel[0], marker='*', ms=16, color='white',
+               markeredgecolor='black', markeredgewidth=0.8)
+    ax_ev.set_title(f'Class evidence -> predicted "{pred}"\n(weight x intensity, peak pixel marked)',
+                     color=TXT, fontsize=9)
+    ax_ev.axis('off')
+    cb_ev = plt.colorbar(im_ev, ax=ax_ev, fraction=0.046, pad=0.04)
+    cb_ev.ax.tick_params(labelsize=6, colors=TXT)
+
     ax_bar = fig.add_subplot(gs[rows - 1, :])
     ax_bar.set_facecolor(BG)
-    pred = int(np.argmax(probs))
     colors = [GREEN if i == true_label else CYAN for i in range(len(probs))]
     if pred != true_label:
         colors[pred] = RED
@@ -217,11 +246,15 @@ def plot_trajectory(trajectory, z_positions, mask_planes_z, pixel_size, out_path
     x_mm = (np.arange(width) - width / 2) * pixel_size * 1e3
     z_mm = z_positions * 1e3
 
-    disp = np.log1p(trajectory / (trajectory.max() + 1e-12) * 1e3)
+    # Gamma < 1 lifts the faint spreading/interference fringes out of the
+    # near-black floor -- a plain linear (or even log1p) scale leaves most
+    # of the frame looking like flat dark purple since the input peak
+    # dwarfs everything downstream of the first mask.
+    norm = PowerNorm(gamma=0.35, vmin=0, vmax=trajectory.max())
 
     fig, ax = plt.subplots(figsize=(8, 10), facecolor='#080810')
     ax.set_facecolor(BG)
-    im = ax.pcolormesh(x_mm, z_mm, disp, cmap='inferno', shading='auto')
+    im = ax.pcolormesh(x_mm, z_mm, trajectory, cmap='inferno', norm=norm, shading='auto')
     for i, mz in enumerate(mask_planes_z):
         ax.axhline(mz * 1e3, color=CYAN, lw=1, ls='--', alpha=0.8)
         ax.text(x_mm.max() * 0.95, mz * 1e3, f'mask {i+1}', color=CYAN, fontsize=8,
@@ -233,7 +266,7 @@ def plot_trajectory(trajectory, z_positions, mask_planes_z, pixel_size, out_path
                  color=TXT, fontsize=11)
     ax.tick_params(colors=TXT)
     cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cb.set_label('Intensity (log, normalised)', color=TXT, fontsize=8)
+    cb.set_label('Intensity (contrast-stretched)', color=TXT, fontsize=8)
     cb.ax.tick_params(colors=TXT, labelsize=7)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor='#080810')
     plt.close(fig)
@@ -258,10 +291,12 @@ def main():
     x, true_label = pick_sample(test_loader, args.digit)
     print(f"Visualising digit '{true_label}'")
 
-    plane_snapshots, trajectory, z_positions, probs = trace_forward(model, x, args.steps_per_hop)
+    plane_snapshots, trajectory, z_positions, probs, detector_crop, readout_weights = trace_forward(
+        model, x, args.steps_per_hop)
     mask_planes_z = [z for label, z, _ in plane_snapshots if label.startswith('After mask')]
 
-    plot_snapshots(plane_snapshots, probs, true_label, os.path.join(OUT_DIR, 'process_snapshots.png'))
+    plot_snapshots(plane_snapshots, probs, true_label, detector_crop, readout_weights,
+                    os.path.join(OUT_DIR, 'process_snapshots.png'))
     plot_trajectory(trajectory, z_positions, mask_planes_z, PIXEL_SIZE, os.path.join(OUT_DIR, 'beam_trajectory.png'))
 
     print(f"\nAll visualisations saved under {OUT_DIR}")
